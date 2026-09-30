@@ -27,6 +27,7 @@ The installer is idempotent (re-run it after `git pull` to update) and only conf
 |---|---|
 | script | `~/.local/bin/herdr-usage` |
 | Claude Code statusline | `~/.claude/settings.json` → `statusLine` (existing custom one kept unless `--force`) |
+| Codex statusline | `~/.codex/config.toml` → `[tui] status_line` with native `model-with-reasoning`, `five-hour-limit`, `weekly-limit` (kept if already set) |
 | herdr sidebar + popup | managed block in `~/.config/herdr/config.toml` |
 | background refresher (only with herdr) | macOS: launchd `dev.herdr.usage` · Linux: systemd user unit `herdr-usage` |
 

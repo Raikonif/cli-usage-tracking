@@ -54,6 +54,32 @@ print("==> Claude Code statusLine configured")
 EOF
 fi
 
+# 2b. Codex statusline: no custom command support, but it has native limit items
+if command -v codex >/dev/null 2>&1 || [ -d "$HOME/.codex" ]; then
+  mkdir -p "$HOME/.codex"
+  "$PYTHON" - "$HOME/.codex/config.toml" <<'EOF'
+import os, re, shutil, sys
+path = sys.argv[1]
+line = 'status_line = ["model-with-reasoning", "five-hour-limit", "weekly-limit"]'
+text = open(path).read() if os.path.exists(path) else ""
+tui = re.search(r"^\[tui\][ \t]*$", text, re.M)
+if tui:
+    nxt = re.search(r"^\[", text[tui.end():], re.M)
+    section = text[tui.end(): tui.end() + nxt.start()] if nxt else text[tui.end():]
+    if re.search(r"^status_line\s*=", section, re.M):
+        print("==> Codex status_line already set (left as is)")
+        sys.exit(0)
+    text = text[: tui.end()] + "\n" + line + text[tui.end():]
+else:
+    text = text.rstrip("\n") + ("\n\n" if text else "") + "[tui]\n" + line + "\n"
+if os.path.exists(path):
+    shutil.copy(path, path + ".bak-herdr-usage")
+with open(path, "w") as f:
+    f.write(text)
+print("==> Codex status_line configured")
+EOF
+fi
+
 # 3. herdr sidebar rows + prefix+u popup
 if command -v herdr >/dev/null 2>&1; then
   CONF="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/config.toml"
