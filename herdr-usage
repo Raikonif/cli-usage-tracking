@@ -196,7 +196,7 @@ def summary():
     hints = {
         "Claude": "open Claude Code once (statusline caches it)",
         "Codex": "run codex once",
-        "Antigravity": "in agy run: /statusline ~/.local/bin/herdr-usage agy-statusline",
+        "Antigravity": "open agy once (statusline caches it)",
     }
     for name, u in (("Claude", claude_usage()), ("Codex", codex_usage()), ("Antigravity", agy_usage())):
         lines.append(f"\033[1m{name}\033[0m")

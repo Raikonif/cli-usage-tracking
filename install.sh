@@ -26,32 +26,41 @@ install -m 755 "$REPO_DIR/herdr-usage" "$BIN"
 say "installed $BIN"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) warn "$BIN_DIR is not in PATH; add it to your shell profile" ;; esac
 
-# 2. Claude Code statusLine (feeds Claude rate limits)
-if command -v claude >/dev/null 2>&1 || [ -d "$HOME/.claude" ]; then
-  mkdir -p "$HOME/.claude"
-  "$PYTHON" - "$HOME/.claude/settings.json" "$BIN" "$FORCE" <<'EOF'
+# 2. Command statuslines (Claude Code and agy share the same settings.json shape)
+# set_statusline <label> <settings.json> <subcommand> <extra json fields>
+set_statusline() {
+  mkdir -p "$(dirname "$2")"
+  "$PYTHON" - "$1" "$2" "$BIN $3" "$4" "$FORCE" <<'EOF'
 import json, os, shutil, sys
-path, binary, force = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
-wanted = {"type": "command", "command": f"{binary} claude-statusline", "padding": 0}
+label, path, command = sys.argv[1:4]
+extra, force = json.loads(sys.argv[4]), sys.argv[5] == "1"
+wanted = {"type": "command", "command": command, **extra}
 data = {}
 if os.path.exists(path):
     with open(path) as f:
         data = json.load(f)
 current = data.get("statusLine")
 if current == wanted:
-    print("==> Claude Code statusLine already configured")
+    print(f"==> {label} statusLine already configured")
     sys.exit(0)
 if current and "herdr-usage" not in json.dumps(current) and not force:
-    print("!! Claude Code already has a custom statusLine; re-run with --force to replace it")
+    print(f"!! {label} already has a custom statusLine; re-run with --force to replace it")
     sys.exit(0)
 if os.path.exists(path):
     shutil.copy(path, path + ".bak-herdr-usage")
 data["statusLine"] = wanted
-with open(path, "w") as f:
+with open(path, "w") as f:  # writing in place keeps the file's permissions
     json.dump(data, f, indent=2)
     f.write("\n")
-print("==> Claude Code statusLine configured")
+print(f"==> {label} statusLine configured")
 EOF
+}
+
+if command -v claude >/dev/null 2>&1 || [ -d "$HOME/.claude" ]; then
+  set_statusline "Claude Code" "$HOME/.claude/settings.json" claude-statusline '{"padding": 0}'
+fi
+if command -v agy >/dev/null 2>&1 || [ -d "$HOME/.gemini/antigravity-cli" ]; then
+  set_statusline "agy" "$HOME/.gemini/antigravity-cli/settings.json" agy-statusline '{}'
 fi
 
 # 2b. Codex statusline: no custom command support, but it has native limit items
@@ -125,11 +134,6 @@ if command -v herdr >/dev/null 2>&1; then
   fi
 else
   warn "herdr not found; skipping sidebar config and background service (statuslines still work)"
-fi
-
-# 5. agy has no config file for its statusline; it must be set from inside agy
-if command -v agy >/dev/null 2>&1; then
-  say "agy: run this once inside agy ->  /statusline $BIN agy-statusline"
 fi
 
 say "done — try: herdr-usage"

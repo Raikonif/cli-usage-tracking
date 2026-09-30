@@ -20,8 +20,8 @@ if [ -f "$CONF" ] && grep -q '>>> herdr-usage >>>' "$CONF"; then
   herdr server reload-config >/dev/null 2>&1
 fi
 
-SETTINGS="$HOME/.claude/settings.json"
-if [ -f "$SETTINGS" ]; then
+for SETTINGS in "$HOME/.claude/settings.json" "$HOME/.gemini/antigravity-cli/settings.json"; do
+  [ -f "$SETTINGS" ] || continue
   python3 - "$SETTINGS" <<'EOF'
 import json, sys
 path = sys.argv[1]
@@ -33,7 +33,7 @@ if "herdr-usage" in json.dumps(data.get("statusLine", "")):
         json.dump(data, f, indent=2)
         f.write("\n")
 EOF
-fi
+done
 
 CODEX_CONF="$HOME/.codex/config.toml"
 if [ -f "$CODEX_CONF" ]; then
@@ -42,4 +42,4 @@ if [ -f "$CODEX_CONF" ]; then
 fi
 
 rm -rf "$BIN" "$HOME/.cache/herdr-usage"
-echo "herdr-usage removed (in agy, run '/statusline delete' to drop its statusline)"
+echo "herdr-usage removed"
