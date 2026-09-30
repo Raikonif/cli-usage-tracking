@@ -35,5 +35,11 @@ if "herdr-usage" in json.dumps(data.get("statusLine", "")):
 EOF
 fi
 
+CODEX_CONF="$HOME/.codex/config.toml"
+if [ -f "$CODEX_CONF" ]; then
+  cp "$CODEX_CONF" "$CODEX_CONF.bak"
+  grep -v -x 'status_line = \["model-with-reasoning", "five-hour-limit", "weekly-limit"\]' "$CODEX_CONF.bak" > "$CODEX_CONF"
+fi
+
 rm -rf "$BIN" "$HOME/.cache/herdr-usage"
 echo "herdr-usage removed (in agy, run '/statusline delete' to drop its statusline)"
