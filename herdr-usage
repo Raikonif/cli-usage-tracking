@@ -242,8 +242,7 @@ def claude_statusline():
     if isinstance(rl, dict):
         write_cache(CLAUDE_CACHE, rl)
     model = (data.get("model") or {}).get("display_name", "")
-    cwd = os.path.basename((data.get("workspace") or {}).get("current_dir", "") or "")
-    print(" │ ".join(x for x in (model, cwd, compact(claude_usage())) if x))
+    print(" │ ".join(x for x in (model, compact(claude_usage())) if x))
 
 
 def agy_statusline():
@@ -257,8 +256,7 @@ def agy_statusline():
     model = data.get("model")
     if isinstance(model, dict):
         model = model.get("display_name") or model.get("name") or model.get("id")
-    cwd = data.get("cwd") or (data.get("workspace") or {}).get("current_dir", "")
-    print(" │ ".join(x for x in (model or "", os.path.basename(cwd or ""), compact(agy_usage())) if x))
+    print(" │ ".join(x for x in (model or "", compact(agy_usage())) if x))
 
 
 def main():
