@@ -1,0 +1,11 @@
+[Unit]
+Description=herdr-usage: report Claude/Codex/agy usage to herdr panes
+
+[Service]
+Environment=PATH=@PATH@
+ExecStart=@PYTHON@ @BIN@ daemon 60
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

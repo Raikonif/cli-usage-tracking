@@ -1,0 +1,15 @@
+# >>> herdr-usage >>>
+# Usage remaining (CodexBar-style) — managed by herdr-usage/install.sh, re-run it to update
+[ui.sidebar.agents.rows_by_agent]
+claude = [["state_icon", "workspace", "tab"], ["agent", { token = "$usage", fg = "#a6e3a1" }]]
+codex = [["state_icon", "workspace", "tab"], ["agent", { token = "$usage", fg = "#a6e3a1" }]]
+agy = [["state_icon", "workspace", "tab"], ["agent", { token = "$usage", fg = "#a6e3a1" }]]
+
+# prefix+u opens a popup with the full usage breakdown
+[[keys.command]]
+key = "prefix+u"
+type = "popup"
+command = "@BIN@ watch"
+width = 70
+height = 14
+# <<< herdr-usage <<<

@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""herdr-usage: show Claude/Codex/Antigravity (agy) usage remaining inside herdr (CodexBar-style).
+
+Sources (no credentials read):
+  Claude: rate_limits from Claude Code's statusline JSON, cached by `herdr-usage claude-statusline`.
+  Codex:  latest rate_limits event in ~/.codex/sessions/**/*.jsonl.
+  agy:    quota buckets from agy's statusline JSON, cached by `herdr-usage agy-statusline`.
+
+Commands:
+  herdr-usage                    print a usage summary (used by the herdr popup)
+  herdr-usage watch              refresh the summary every 30s
+  herdr-usage push               report `$usage` pane tokens to claude/codex/agy panes once
+  herdr-usage daemon [secs]      run `push` in a loop (default 60s)
+  herdr-usage claude-statusline  Claude Code statusLine command: caches rate_limits, prints a line
+  herdr-usage agy-statusline     agy `/statusline` command: caches quota, prints a line
+"""
+import glob
+import json
+import os
+import subprocess
+import sys
+import re
+import time
+from datetime import datetime
+
+CACHE_DIR = os.path.expanduser("~/.cache/herdr-usage")
+CLAUDE_CACHE = os.path.join(CACHE_DIR, "claude.json")
+AGY_CACHE = os.path.join(CACHE_DIR, "agy.json")
+CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
+SOURCE = "herdr-usage"
+
+
+def to_epoch(ts):
+    """Accept unix seconds/millis or an ISO-8601 string."""
+    if ts in (None, ""):
+        return None
+    if isinstance(ts, str) and not re.fullmatch(r"[\d.]+", ts):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    ts = float(ts)
+    return ts / 1000 if ts > 1e12 else ts
+
+
+def fmt_reset(ts):
+    ts = to_epoch(ts)
+    if not ts:
+        return ""
+    secs = int(ts - time.time())
+    if secs <= 0:
+        return "now"
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        return f"{d}d{h}h"
+    if h:
+        return f"{h}h{m:02d}m"
+    return f"{m}m"
+
+
+def window(used, resets_at):
+    if used is None:
+        return None
+    if to_epoch(resets_at) and to_epoch(resets_at) < time.time():
+        used = 0.0  # window already reset since the snapshot was taken
+    return {"left": max(0.0, 100.0 - float(used)), "reset": fmt_reset(resets_at)}
+
+
+def claude_usage():
+    try:
+        with open(CLAUDE_CACHE) as f:
+            rl = json.load(f)
+    except (OSError, ValueError):
+        return None
+
+    def pick(*names):
+        for n in names:
+            w = rl.get(n)
+            if isinstance(w, dict):
+                used = w.get("used_percentage", w.get("used_percent", w.get("utilization")))
+                return window(used, w.get("resets_at"))
+        return None
+
+    return {
+        "short": pick("five_hour", "5h", "primary"),
+        "long": pick("seven_day", "7d", "weekly", "secondary"),
+    }
+
+
+def codex_usage():
+    files = glob.glob(os.path.join(CODEX_SESSIONS, "**", "*.jsonl"), recursive=True)
+    for path in sorted(files, key=os.path.getmtime, reverse=True)[:5]:
+        rl = None
+        try:
+            with open(path) as f:
+                for line in f:
+                    if '"rate_limits"' not in line:
+                        continue
+                    try:
+                        payload = json.loads(line).get("payload", {})
+                    except ValueError:
+                        continue
+                    if isinstance(payload.get("rate_limits"), dict):
+                        rl = payload["rate_limits"]
+        except OSError:
+            continue
+        if rl:
+            p, s = rl.get("primary") or {}, rl.get("secondary") or {}
+            return {
+                "short": window(p.get("used_percent"), p.get("resets_at")),
+                "long": window(s.get("used_percent"), s.get("resets_at")),
+            }
+    return None
+
+
+def write_cache(path, data):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+RESET_KEYS = ("resets_at", "reset_at", "reset_time", "resetTime", "resets_in")
+
+
+def agy_usage():
+    """agy reports `quota` as {bucket: {remaining_percentage, ...}} (or a list of buckets)."""
+    try:
+        with open(AGY_CACHE) as f:
+            quota = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if isinstance(quota, list):
+        quota = {str(b.get("name") or b.get("id") or i): b for i, b in enumerate(quota) if isinstance(b, dict)}
+    if not isinstance(quota, dict):
+        return None
+    buckets = []
+    for name, b in quota.items():
+        if not isinstance(b, dict):
+            continue
+        left = b.get("remaining_percentage", b.get("remaining_fraction"))
+        if left is None:
+            continue
+        left = float(left) * (100 if "remaining_percentage" not in b and float(left) <= 1 else 1)
+        reset = next((b[k] for k in RESET_KEYS if b.get(k)), None)
+        if to_epoch(reset) and to_epoch(reset) < time.time():
+            left = 100.0
+        buckets.append((name, {"left": left, "reset": fmt_reset(reset)}))
+    return {"buckets": buckets} if buckets else None
+
+
+AGY_GROUPS = {"gemini": "Gemini", "3p": "3rd-party"}
+AGY_WINDOWS = {"5h": "5h", "weekly": "7d", "daily": "1d"}
+
+
+def split_bucket(name):
+    """agy buckets look like `gemini-5h` / `3p-weekly` -> (group, window)."""
+    group, _, win = str(name).rpartition("-")
+    return (group, win) if group else (str(name), "")
+
+
+def bucket_label(name):
+    group, win = split_bucket(name)
+    return f"{AGY_GROUPS.get(group, group)} {AGY_WINDOWS.get(win, win)}".strip()
+
+
+def compact(u):
+    """Short form for the sidebar: `5h 82%·7d 60%` (percent LEFT)."""
+    if not u:
+        return "usage n/a"
+    if "buckets" in u:
+        # one value per model group: the most restrictive of its windows
+        groups = {}
+        for name, w in u["buckets"]:
+            group = split_bucket(name)[0]
+            groups[group] = min(groups.get(group, 100.0), w["left"])
+        return "·".join(f"{'gem' if g == 'gemini' else g} {left:.0f}%" for g, left in groups.items())
+    parts = []
+    for label, key in (("5h", "short"), ("7d", "long")):
+        w = u.get(key)
+        if w:
+            parts.append(f"{label} {w['left']:.0f}%")
+    return "·".join(parts) or "usage n/a"
+
+
+def bar(pct, width=20):
+    filled = round(pct / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def summary():
+    lines = []
+    hints = {
+        "Claude": "open Claude Code once (statusline caches it)",
+        "Codex": "run codex once",
+        "Antigravity": "in agy run: /statusline ~/.local/bin/herdr-usage agy-statusline",
+    }
+    for name, u in (("Claude", claude_usage()), ("Codex", codex_usage()), ("Antigravity", agy_usage())):
+        lines.append(f"\033[1m{name}\033[0m")
+        if not u:
+            lines.append(f"  no data yet — {hints[name]}")
+            continue
+        rows = [(bucket_label(n), w) for n, w in u.get("buckets", [])] or [
+            (label, u.get(key)) for label, key in (("Session (5h)", "short"), ("Weekly (7d)", "long"))
+        ]
+        for label, w in rows:
+            if w:
+                reset = f"  resets in {w['reset']}" if w["reset"] else ""
+                lines.append(f"  {str(label)[:12]:<12} {bar(w['left'])} {w['left']:3.0f}% left{reset}")
+    return "\n".join(lines)
+
+
+def herdr(*args):
+    out = subprocess.run(["herdr", *args], capture_output=True, text=True, timeout=10)
+    return json.loads(out.stdout) if out.returncode == 0 and out.stdout.strip() else None
+
+
+def push(ttl_ms):
+    listing = herdr("pane", "list")
+    if not listing:
+        return
+    tokens = {"claude": compact(claude_usage()), "codex": compact(codex_usage()), "agy": compact(agy_usage())}
+    for pane in listing["result"]["panes"]:
+        value = tokens.get(pane.get("agent"))
+        if value:
+            subprocess.run(
+                ["herdr", "pane", "report-metadata", pane["pane_id"], "--source", SOURCE,
+                 "--token", f"usage={value}", "--ttl-ms", str(ttl_ms)],
+                capture_output=True, timeout=10,
+            )
+
+
+def claude_statusline():
+    try:
+        data = json.load(sys.stdin)
+    except ValueError:
+        data = {}
+    rl = data.get("rate_limits")
+    if isinstance(rl, dict):
+        write_cache(CLAUDE_CACHE, rl)
+    model = (data.get("model") or {}).get("display_name", "")
+    cwd = os.path.basename((data.get("workspace") or {}).get("current_dir", "") or "")
+    print(" │ ".join(x for x in (model, cwd, compact(claude_usage())) if x))
+
+
+def agy_statusline():
+    try:
+        data = json.load(sys.stdin)
+    except ValueError:
+        data = {}
+    quota = data.get("quota")
+    if isinstance(quota, (dict, list)) and quota:
+        write_cache(AGY_CACHE, quota)
+    model = data.get("model")
+    if isinstance(model, dict):
+        model = model.get("display_name") or model.get("name") or model.get("id")
+    cwd = data.get("cwd") or (data.get("workspace") or {}).get("current_dir", "")
+    print(" │ ".join(x for x in (model or "", os.path.basename(cwd or ""), compact(agy_usage())) if x))
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "print"
+    if cmd == "print":
+        print(summary())
+    elif cmd == "watch":
+        try:
+            while True:
+                sys.stdout.write("\033[H\033[2J" + summary() + "\n\n\033[2m(ctrl+c to close)\033[0m\n")
+                sys.stdout.flush()
+                time.sleep(30)
+        except KeyboardInterrupt:
+            pass
+    elif cmd == "push":
+        push(180000)
+    elif cmd == "daemon":
+        interval = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+        while True:
+            try:
+                push(interval * 3000)
+            except Exception as e:  # keep the loop alive across herdr restarts
+                print(f"herdr-usage: {e}", file=sys.stderr)
+            time.sleep(interval)
+    elif cmd == "claude-statusline":
+        claude_statusline()
+    elif cmd == "agy-statusline":
+        agy_statusline()
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
